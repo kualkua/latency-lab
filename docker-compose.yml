@@ -1,0 +1,79 @@
+services:
+  app:
+    build: .
+    environment:
+      # Enables tracing: spans go to the Collector. Remove this line to disable tracing.
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_SERVICE_NAME: latency-lab
+      # /tail fetches the balance from the second service. Remove this line and the "DB" is simulated inside app.
+      WALLET_URL: http://wallet:3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - otel-collector
+      - wallet
+
+  # Second service (same image, different entrypoint). Needed so the trace spans two services.
+  wallet:
+    build: .
+    command: ["node", "dist/wallet-server.js"]
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_SERVICE_NAME: wallet
+    depends_on:
+      - otel-collector
+
+  # Receives traces from the app, keeps slow/errored ones + 10% of the rest, forwards them to Jaeger
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.114.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel/collector-config.yaml:/etc/otelcol/config.yaml:ro
+    depends_on:
+      - jaeger
+
+  # Trace storage and UI: http://localhost:16686
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - app
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      # No login, so the dashboard is visible right away (local setup only!)
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/latency.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+
+  # Load generator: ~40 requests/s for 15 minutes.
+  # Stop with: docker compose stop k6
+  k6:
+    image: grafana/k6:0.55.0
+    command: run /scripts/load.js
+    environment:
+      BASE_URL: http://app:3000
+    volumes:
+      - ./k6:/scripts:ro
+    depends_on:
+      - app

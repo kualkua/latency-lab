@@ -1,0 +1,42 @@
+groups:
+  - name: latency-lab
+    rules:
+      # Symptom of "event loop blocking": p95 grew on a route that is fast by itself.
+      - alert: FastRouteP95High
+        expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{route="/fast"}[1m]))) > 0.1
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 of /fast above 100 ms"
+          description: "The fast route slowed down. If EventLoopLagHigh fired at the same time, the Node thread is busy."
+
+      # The Node thread cannot keep up with events: heavy synchronous code, GC, large JSON.
+      - alert: EventLoopLagHigh
+        expr: nodejs_eventloop_lag_p99_seconds > 0.1
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Event loop lag p99 above 100 ms"
+          description: "Check the flamegraph and look for heavy synchronous work in the process."
+
+      # Share of 5xx. Fires if wallet is stopped: /tail starts returning 502.
+      - alert: ErrorRateHigh
+        expr: sum(rate(http_request_duration_seconds_count{status=~"5.."}[1m])) / sum(rate(http_request_duration_seconds_count[1m])) > 0.05
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "5xx response share above 5%"
+          description: "Open error traces in Jaeger: they show which dependency failed."
+
+      # /tail has a normal tail of 0.6–0.9 s (2% slow requests), so the threshold is above the setup's norm.
+      - alert: TailRouteP99Degraded
+        expr: histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{route="/tail"}[1m]))) > 1
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p99 of /tail above 1 s"
+          description: "The tail is worse than normal. Check traces with Min Duration 1s."

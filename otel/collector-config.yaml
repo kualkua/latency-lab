@@ -1,0 +1,40 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  # Tail sampling: the decision whether to keep a trace is made AFTER it has finished.
+  # This keeps all slow and all errored traces, and only a fraction of the rest.
+  tail_sampling:
+    decision_wait: 5s
+    policies:
+      - name: slow-traces
+        type: latency
+        latency:
+          threshold_ms: 300
+      - name: errors
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+      - name: sample-the-rest
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 10
+  batch: {}
+
+exporters:
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [tail_sampling, batch]
+      exporters: [otlp/jaeger]
